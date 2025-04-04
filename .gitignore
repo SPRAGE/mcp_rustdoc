@@ -9,3 +9,5 @@ Cargo.lock
 .env.local
 .DS_Store
 Thumbs.db
+.cursorrules
+.cursor/
