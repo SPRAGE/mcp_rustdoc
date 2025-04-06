@@ -72,8 +72,6 @@ impl DocsRsClient {
             params.path.trim_start_matches('/')
         );
         
-        println!("Fetching documentation from: {}", url);
-        
         let response = self.client.get(&url)
             .header("Accept", "text/html")
             .send()

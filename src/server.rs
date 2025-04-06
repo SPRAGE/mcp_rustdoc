@@ -26,11 +26,13 @@ impl DocFetcher {
         Self { cache }
     }
 
+    #[allow(dead_code)]
     /// Checks if the document for the given parameters is already in the cache.
     pub async fn is_cached(&self, params: &DocsRsParams) -> bool {
         self.cache.contains_key(params).await
     }
 
+    #[allow(dead_code)]
     /// Clears the entire document cache.
     pub async fn clear_cache(&self) {
         self.cache.clear().await;
