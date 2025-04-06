@@ -2,6 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use rmcp::{schemars, model::{IntoContents, Content}};
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Error)]
 pub enum DocsFetchError {
@@ -19,7 +20,7 @@ pub enum DocsFetchError {
     ParseError(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, Eq, PartialEq, Hash)]
 pub struct DocsRsParams {
     #[schemars(description = "name of crate")]
     pub crate_name: String,
@@ -29,7 +30,7 @@ pub struct DocsRsParams {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DocContent {
     pub content: String,
 }

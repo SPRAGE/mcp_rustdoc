@@ -5,17 +5,37 @@ use rmcp::{Error as McpError, ServerHandler, model::ServerInfo, tool, transport:
 use rmcp::transport::sse_server::SseServer;
 use tracing_subscriber::{self, layer::SubscriberExt, util::SubscriberInitExt};
 use anyhow::Result;
+use std::sync::Arc;
+use std::path::PathBuf;
+use std::time::Instant;
 
+use crate::cache::{Cache, InMemoryCache};
 use crate::docs_parser::{DocsRsClient, DocsRsParams, DocContent};
 
-#[derive(Debug, Clone)]
-pub struct DocFetcher;
+// const CACHE_FILE: &str = "./doc_cache.json"; // Remove single file constant
+const CACHE_DIR: &str = ".cache"; // Define cache directory constant
+
+#[derive(Clone)]
+pub struct DocFetcher {
+    cache: Arc<InMemoryCache>,
+}
 
 // create a static toolbox to store the tool attributes
 #[tool(tool_box)]
 impl DocFetcher {
-    pub fn new() -> Self {
-        Self{}
+    pub fn new(cache: Arc<InMemoryCache>) -> Self {
+        Self { cache }
+    }
+
+    /// Checks if the document for the given parameters is already in the cache.
+    pub async fn is_cached(&self, params: &DocsRsParams) -> bool {
+        self.cache.contains_key(params).await
+    }
+
+    /// Clears the entire document cache.
+    pub async fn clear_cache(&self) {
+        self.cache.clear().await;
+        tracing::info!("Document cache cleared.");
     }
 
     #[tool(description = "Fetch a rust document and extract its content")]
@@ -23,15 +43,25 @@ impl DocFetcher {
         #[tool(aggr)]
         params: DocsRsParams,
     ) -> DocContent {
+        // Check cache first
+        if let Some(cached_content) = self.cache.get(&params).await {
+            tracing::info!("Cache hit for {:?}", params);
+            return cached_content;
+        }
+        
+        tracing::info!("Cache miss for {:?}. Fetching...", params);
         let client = DocsRsClient::new();
-        match client.fetch_docs(params).await {
-            Ok(doc_content) => doc_content,
+        match client.fetch_docs(params.clone()).await {
+            Ok(doc_content) => {
+                // Store in cache
+                self.cache.insert(params, doc_content.clone()).await;
+                doc_content
+            },
             Err(err) => DocContent { 
                 content: format!("Error fetching documentation: {}", err) 
             },
         }
     }
-
 }
 
 // impl call_tool and list_tool by querying static toolbox
@@ -80,11 +110,22 @@ pub async fn start_sse_server(addr: &str) -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let ct = SseServer::serve(addr.parse()?)
+    let cache_dir_path = PathBuf::from(CACHE_DIR);
+    let cache = Arc::new(InMemoryCache::new());
+    if let Err(e) = cache.load(&cache_dir_path).await {
+        tracing::error!("Failed to load cache from {:?}: {}. Starting fresh.", cache_dir_path, e);
+    }
+
+    let server_cache = cache.clone(); // Clone Arc for the server service
+    let ct = SseServer::serve(addr.parse()?) 
         .await?
-        .with_service(DocFetcher::new);
+        .with_service(move || DocFetcher::new(server_cache.clone()));
 
     tokio::signal::ctrl_c().await?;
+    tracing::info!("Shutdown signal received. Saving cache...");
+    if let Err(e) = cache.save(&cache_dir_path).await {
+        tracing::error!("Failed to save cache to {:?}: {}", cache_dir_path, e);
+    }
     ct.cancel();
     Ok(())
 }
@@ -100,12 +141,24 @@ pub async fn start_stdio_server() -> anyhow::Result<()> {
 
     tracing::info!("Starting MCP server");
 
+    let cache_dir_path = PathBuf::from(CACHE_DIR);
+    let cache = Arc::new(InMemoryCache::new());
+    if let Err(e) = cache.load(&cache_dir_path).await {
+        tracing::error!("Failed to load cache from {:?}: {}. Starting fresh.", cache_dir_path, e);
+    }
+
     // Create an instance
-    let service = DocFetcher::new().serve(stdio()).await.inspect_err(|e| {
+    let service_cache = cache.clone(); // Clone Arc for the service
+    let service = DocFetcher::new(service_cache).serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {:?}", e);
     })?;
 
     service.waiting().await?;
+
+    tracing::info!("Service finished. Saving cache...");
+    if let Err(e) = cache.save(&cache_dir_path).await {
+        tracing::error!("Failed to save cache to {:?}: {}", cache_dir_path, e);
+    }
     Ok(())
 }
 
@@ -114,10 +167,17 @@ mod tests {
     use super::*;
     use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
     use rmcp::{ServiceExt, model::CallToolRequestParam, transport::SseTransport};
+    use tempfile::tempdir;
+
+    fn setup_test_fetcher() -> (DocFetcher, Arc<InMemoryCache>) {
+        let cache = Arc::new(InMemoryCache::new());
+        let fetcher = DocFetcher::new(cache.clone());
+        (fetcher, cache)
+    }
 
     #[tokio::test]
     async fn test_fetch_document() {
-        let doc_fetcher = DocFetcher::new();
+        let (doc_fetcher, _cache) = setup_test_fetcher();
         let params = DocsRsParams {
             crate_name: "rand".to_string(),
             version: "0.9.0".to_string(),
@@ -135,10 +195,16 @@ mod tests {
     async fn test_sse_server() {
         // start sse server
         let addr = "127.0.0.1:8000";
+        let temp_dir = tempdir().unwrap(); // Create temp dir for cache file
+        let cache_path = temp_dir.path().join("sse_test_cache.json");
+        let cache = Arc::new(InMemoryCache::new());
+        // No need to load/save in this specific test, focus is on MCP comms
+
+        let server_cache = cache.clone();
         let server = SseServer::serve(addr.parse().unwrap())
             .await
             .unwrap()
-            .with_service(DocFetcher::new);
+            .with_service(move || DocFetcher::new(server_cache.clone()));
 
         let transport = SseTransport::start(&format!("http://{}/sse", addr)).await.unwrap();
 
@@ -174,5 +240,86 @@ mod tests {
         // println!("Tool result: {result:#?}");
         assert!(!result.content.is_empty());
         assert!(result.content.iter().any(|c| c.as_text().unwrap().text.contains("Utilities for random number generation")));
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit() {
+        // Basic tracing setup for observing cache logs during test execution
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let (doc_fetcher, cache) = setup_test_fetcher();
+        let params = DocsRsParams {
+            crate_name: "serde".to_string(),
+            version: "1.0".to_string(), // Use a common crate/version
+            path: "serde".to_string(),
+        };
+
+        // Clear the cache
+        doc_fetcher.clear_cache().await;
+
+        // Assert not cached initially
+        assert!(!cache.contains_key(&params).await, "Document should not be cached initially");
+
+        // First call - should be a cache miss
+        println!("First fetch attempt (expect cache miss)...");
+        let start1 = Instant::now();
+        let result1 = doc_fetcher.fetch_document(params.clone()).await;
+        let duration1 = start1.elapsed();
+        println!("First fetch took: {:?}", duration1);
+        assert!(!result1.content.is_empty(), "First fetch failed or returned empty content");
+        assert!(!result1.content.contains("Error fetching documentation"), "First fetch resulted in an error: {}", result1.content);
+
+        // Assert cached now
+        assert!(cache.contains_key(&params).await, "Document should be cached after first fetch");
+
+        // Second call - should be a cache hit
+        println!("\nSecond fetch attempt (expect cache hit)...");
+        let start2 = Instant::now();
+        let result2 = doc_fetcher.fetch_document(params.clone()).await;
+        let duration2 = start2.elapsed();
+        println!("Second fetch took: {:?}", duration2);
+        assert!(!result2.content.is_empty(), "Second fetch failed or returned empty content");
+
+        // Verify results are the same
+        assert_eq!(result1.content, result2.content, "Cache returned different content");
+
+        // Verify cache was faster (allow for some small overhead)
+        // Ensure duration2 is significantly less than duration1 (e.g., < 1/10th)
+        // Add a small tolerance to avoid flakes due to tiny timings
+        assert!(duration2 < duration1 / 10 || duration2.as_millis() < 10, 
+                "Cache hit ({:?}) was not significantly faster than cache miss ({:?})", 
+                duration2, duration1);
+
+        println!("\nCache timing test complete. Second fetch was significantly faster.");
+    }
+
+    #[tokio::test]
+    async fn test_clear_cache() {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let (doc_fetcher, cache) = setup_test_fetcher();
+        let params = DocsRsParams {
+            crate_name: "tokio".to_string(), // Use a different crate for variety
+            version: "1.30.0".to_string(),
+            path: "tokio/fs".to_string(),
+        };
+
+        // Fetch document to populate cache
+        println!("Fetching document to populate cache...");
+        let _ = doc_fetcher.fetch_document(params.clone()).await;
+
+        // Assert it's cached
+        assert!(cache.contains_key(&params).await, "Document should be in cache directly after fetching");
+        assert!(doc_fetcher.is_cached(&params).await, "Document should be cached after fetching (via fetcher)");
+        println!("Document is cached.");
+
+        // Clear the cache
+        println!("Clearing cache...");
+        doc_fetcher.clear_cache().await;
+
+        // Assert it's no longer cached
+        assert!(!cache.contains_key(&params).await, "Document should not be in cache directly after clearing");
+        assert!(!doc_fetcher.is_cached(&params).await, "Document should not be cached after clearing (via fetcher)");
+        println!("Cache successfully cleared.");
     }
 }
