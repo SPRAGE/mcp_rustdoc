@@ -43,7 +43,24 @@ Options:
 
 ### Connecting to the Server
 
-You can connect to the server using direct HTTP for simple testing. The example client in `examples/client.rs` demonstrates this approach.
+## Configuration for MCP Clients (e.g., Cursor)
+
+To connect an MCP client like Cursor to this server, you can use the following configuration.
+
+### Stdio Server Configuration
+
+If you are running the server in stdio mode, use a configuration similar to this:
+
+```json
+"rustdoc-mcp": {
+        "command": "path_to_the_binary",
+        "args": [
+            "--server-type",
+            "stdio"
+        ]
+      }
+```
+
 
 ### Testing
 
@@ -73,62 +90,7 @@ Parameters:
 - `version`: Version of the crate (e.g., "1.0.0", "latest")
 - `path`: Path to the specific item you want documentation for (e.g., "serde/ser/trait.Serializer.html")
 
-Example call with raw JSON-RPC:
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "mcp.fetch_document",
-  "params": {
-    "crate_name": "tokio",
-    "version": "1.0.0",
-    "path": "tokio/time/fn.sleep.html"
-  }
-}
-```
-
-Example response:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": "<!DOCTYPE html><html lang=\"en\">...[HTML content]..."
-}
-```
-
-### Example Use Cases
-
-#### Query the `std::fs::read_to_string` function
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "mcp.fetch_document",
-  "params": {
-    "crate_name": "std",
-    "version": "latest",
-    "path": "std/fs/fn.read_to_string.html"
-  }
-}
-```
-
-#### Query the `serde_json::to_string` function for version 1.0.0
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "method": "mcp.fetch_document",
-  "params": {
-    "crate_name": "serde_json",
-    "version": "1.0.0", 
-    "path": "serde_json/fn.to_string.html"
-  }
-}
-```
 
 ## Future Improvements
 

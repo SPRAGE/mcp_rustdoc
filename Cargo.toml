@@ -17,7 +17,7 @@ tracing-subscriber = { version = "0.3", features = [
 reqwest = { version = "0.12.15", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.44.1", features = ["full"] }
+tokio = { version = "1.44.2", features = ["full"] }
 thiserror = "2.0.12"
 url = "2.3"
 anyhow = "1.0.97"
@@ -27,6 +27,7 @@ scraper = "0.23.1"
 [dev-dependencies]
 mockito = "1.2.0"
 assert_json = "0.1"
+rmcp = { version = "0.1.5", features = ["client", "transport-sse", "transport-child-process"] }
 tokio = { version = "1.44.1", features = ["full", "tracing"] }
 console-subscriber = "0.4.1"
 tracing-subscriber = "0.3.19"

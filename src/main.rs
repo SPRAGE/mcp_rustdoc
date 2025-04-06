@@ -34,7 +34,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server::start_sse_server(&cli.address).await?;
         },
         ServerType::Stdio => {
-            println!("Starting stdio server");
             server::start_stdio_server().await?;
         },
     }
