@@ -7,7 +7,6 @@ use tracing_subscriber::{self, layer::SubscriberExt, util::SubscriberInitExt};
 use anyhow::Result;
 use std::sync::Arc;
 use std::path::PathBuf;
-use std::time::Instant;
 
 use crate::cache::{Cache, InMemoryCache};
 use crate::docs_parser::{DocsRsClient, DocsRsParams, DocContent};
@@ -111,19 +110,19 @@ pub async fn start_sse_server(addr: &str) -> anyhow::Result<()> {
         .init();
 
     let cache_dir_path = PathBuf::from(CACHE_DIR);
-    let cache = Arc::new(InMemoryCache::new());
-    if let Err(e) = cache.load(&cache_dir_path).await {
+    let cache = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
+    if let Err(e) = cache.load().await {
         tracing::error!("Failed to load cache from {:?}: {}. Starting fresh.", cache_dir_path, e);
     }
 
-    let server_cache = cache.clone(); // Clone Arc for the server service
+    let server_cache = cache.clone();
     let ct = SseServer::serve(addr.parse()?) 
         .await?
         .with_service(move || DocFetcher::new(server_cache.clone()));
 
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutdown signal received. Saving cache...");
-    if let Err(e) = cache.save(&cache_dir_path).await {
+    if let Err(e) = cache.save().await {
         tracing::error!("Failed to save cache to {:?}: {}", cache_dir_path, e);
     }
     ct.cancel();
@@ -142,13 +141,13 @@ pub async fn start_stdio_server() -> anyhow::Result<()> {
     tracing::info!("Starting MCP server");
 
     let cache_dir_path = PathBuf::from(CACHE_DIR);
-    let cache = Arc::new(InMemoryCache::new());
-    if let Err(e) = cache.load(&cache_dir_path).await {
+    let cache = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
+    if let Err(e) = cache.load().await {
         tracing::error!("Failed to load cache from {:?}: {}. Starting fresh.", cache_dir_path, e);
     }
 
     // Create an instance
-    let service_cache = cache.clone(); // Clone Arc for the service
+    let service_cache = cache.clone();
     let service = DocFetcher::new(service_cache).serve(stdio()).await.inspect_err(|e| {
         tracing::error!("serving error: {:?}", e);
     })?;
@@ -156,7 +155,7 @@ pub async fn start_stdio_server() -> anyhow::Result<()> {
     service.waiting().await?;
 
     tracing::info!("Service finished. Saving cache...");
-    if let Err(e) = cache.save(&cache_dir_path).await {
+    if let Err(e) = cache.save().await {
         tracing::error!("Failed to save cache to {:?}: {}", cache_dir_path, e);
     }
     Ok(())
@@ -168,11 +167,20 @@ mod tests {
     use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
     use rmcp::{ServiceExt, model::CallToolRequestParam, transport::SseTransport};
     use tempfile::tempdir;
+    use std::time::Instant;
+    use std::fs; // Import fs for test setup if needed later
 
     fn setup_test_fetcher() -> (DocFetcher, Arc<InMemoryCache>) {
-        let cache = Arc::new(InMemoryCache::new());
+        // Tests might need a temporary directory for the cache
+        let temp_dir = tempdir().unwrap();
+        let cache_dir = temp_dir.path().to_path_buf();
+        // Ensure the dir exists for tests that don't explicitly save/load
+        fs::create_dir_all(&cache_dir).unwrap(); 
+
+        let cache = Arc::new(InMemoryCache::new(cache_dir));
         let fetcher = DocFetcher::new(cache.clone());
         (fetcher, cache)
+        // Note: temp_dir will be dropped (and deleted) when the test finishes
     }
 
     #[tokio::test]
@@ -193,19 +201,17 @@ mod tests {
     
     #[tokio::test]
     async fn test_sse_server() {
-        // start sse server
+        // setup_test_fetcher now creates a temp dir for the cache
         let addr = "127.0.0.1:8000";
-        let temp_dir = tempdir().unwrap(); // Create temp dir for cache file
-        let cache_path = temp_dir.path().join("sse_test_cache.json");
-        let cache = Arc::new(InMemoryCache::new());
-        // No need to load/save in this specific test, focus is on MCP comms
+        let temp_cache_dir = tempdir().unwrap().path().to_path_buf(); // Explicit dir for this test
+        let server_cache = Arc::new(InMemoryCache::new(temp_cache_dir));
 
-        let server_cache = cache.clone();
-        let server = SseServer::serve(addr.parse().unwrap())
+        let service_cache_clone = server_cache.clone(); // Clone for the service closure
+        let server = SseServer::serve(addr.parse().unwrap()) 
             .await
             .unwrap()
-            .with_service(move || DocFetcher::new(server_cache.clone()));
-
+            .with_service(move || DocFetcher::new(service_cache_clone.clone()));
+        
         let transport = SseTransport::start(&format!("http://{}/sse", addr)).await.unwrap();
 
         let client_info = ClientInfo {
@@ -244,9 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_hit() {
-        // Basic tracing setup for observing cache logs during test execution
-        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-
+        // setup_test_fetcher now creates a temp dir for the cache
         let (doc_fetcher, cache) = setup_test_fetcher();
         let params = DocsRsParams {
             crate_name: "serde".to_string(),
@@ -295,8 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear_cache() {
-        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-
+        // setup_test_fetcher now creates a temp dir for the cache
         let (doc_fetcher, cache) = setup_test_fetcher();
         let params = DocsRsParams {
             crate_name: "tokio".to_string(), // Use a different crate for variety

@@ -2,11 +2,11 @@ use crate::docs_parser::{DocContent, DocsRsParams};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io};
-use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::RwLock;
 use itertools::Itertools; // Added for grouping
+use std::path::PathBuf;
 
 /// Trait for a cache implementation.
 #[async_trait]
@@ -15,10 +15,10 @@ pub trait Cache: Send + Sync {
     async fn insert(&self, key: DocsRsParams, value: DocContent);
     async fn contains_key(&self, key: &DocsRsParams) -> bool;
     async fn clear(&self);
-    /// Save cache state to the specified directory path.
-    async fn save(&self, dir_path: &Path) -> Result<(), io::Error>;
-    /// Load cache state from the specified directory path.
-    async fn load(&self, dir_path: &Path) -> Result<(), io::Error>;
+    /// Save cache state to its configured directory.
+    async fn save(&self) -> Result<(), io::Error>;
+    /// Load cache state from its configured directory.
+    async fn load(&self) -> Result<(), io::Error>;
 }
 
 /// Represents the data stored per crate file.
@@ -54,12 +54,14 @@ fn denormalize_key(crate_name: &str, normalized_key: &str) -> Result<DocsRsParam
 #[derive(Debug, Clone)]
 pub struct InMemoryCache {
     cache: Arc<RwLock<CacheData>>,
+    cache_dir: PathBuf,
 }
 
 impl InMemoryCache {
-    pub fn new() -> Self {
+    pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             cache: Arc::new(RwLock::new(CacheData::default())),
+            cache_dir,
         }
     }
 }
@@ -82,8 +84,9 @@ impl Cache for InMemoryCache {
         self.cache.write().await.data.clear();
     }
 
-    /// Saves the cache content to multiple JSON files within a directory, one file per crate.
-    async fn save(&self, dir_path: &Path) -> Result<(), io::Error> {
+    /// Saves the cache content to multiple JSON files within the configured directory.
+    async fn save(&self) -> Result<(), io::Error> {
+        let dir_path = &self.cache_dir;
         // 1. Prepare data outside the main async block to avoid holding lock across .await
         let data_to_save: HashMap<String, CrateCacheData> = { // New scope for the lock guard
             let cache_guard = self.cache.read().await;
@@ -145,8 +148,9 @@ impl Cache for InMemoryCache {
         Ok(())
     }
 
-     /// Loads cache content from multiple JSON files within a directory.
-    async fn load(&self, dir_path: &Path) -> Result<(), io::Error> {
+     /// Loads cache content from multiple JSON files within the configured directory.
+    async fn load(&self) -> Result<(), io::Error> {
+        let dir_path = &self.cache_dir;
         if !dir_path.exists() {
             tracing::info!("Cache directory {:?} not found, starting with empty cache.", dir_path);
             // Ensure cache is empty
@@ -245,7 +249,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_get_contains() {
-        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        let dir = tempdir().unwrap();
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new(dir.path().to_path_buf()));
         let params1 = create_params("test1");
         let content1 = create_content("content1");
         let params2 = create_params("test2");
@@ -262,7 +267,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear() {
-        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new());
+        let dir = tempdir().unwrap();
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new(dir.path().to_path_buf()));
         let params1 = create_params("test1");
         let content1 = create_content("content1");
 
@@ -277,9 +283,9 @@ mod tests {
     #[tokio::test]
     async fn test_save_load_single_crate() {
         let dir = tempdir().unwrap();
-        let cache_dir_path = dir.path(); //.join(".cache"); // Use root temp dir
+        let cache_dir_path = dir.path().to_path_buf();
 
-        let cache1 = Arc::new(InMemoryCache::new());
+        let cache1 = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
         let params1 = create_params("serde"); // crate_name: "serde"
         let content1 = create_content("serde content");
         let params2 = DocsRsParams { // Same crate, different path/version
@@ -293,7 +299,7 @@ mod tests {
         cache1.insert(params2.clone(), content2.clone()).await;
 
         // Save cache1
-        cache1.save(&cache_dir_path).await.expect("Failed to save cache");
+        cache1.save().await.expect("Failed to save cache");
 
         // Check if the specific file exists
         let crate_file = cache_dir_path.join("serde.json");
@@ -307,8 +313,8 @@ mod tests {
          assert!(file_content.contains("serde derive content"));
 
         // Create cache2 and load from directory
-        let cache2 = Arc::new(InMemoryCache::new());
-        cache2.load(&cache_dir_path).await.expect("Failed to load cache");
+        let cache2 = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
+        cache2.load().await.expect("Failed to load cache");
 
         // Verify cache2 content
         assert_eq!(cache2.cache.read().await.data.len(), 2, "Cache should have 2 items");
@@ -321,9 +327,9 @@ mod tests {
     #[tokio::test]
     async fn test_save_load_multiple_crates() {
         let dir = tempdir().unwrap();
-        let cache_dir_path = dir.path();
+        let cache_dir_path = dir.path().to_path_buf();
 
-        let cache1 = Arc::new(InMemoryCache::new());
+        let cache1 = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
         let params_serde = create_params("serde");
         let content_serde = create_content("serde content");
         let params_tokio = create_params("tokio"); // crate_name: "tokio"
@@ -341,7 +347,7 @@ mod tests {
         cache1.insert(params_rand.clone(), content_rand.clone()).await;
 
         // Save cache1
-        cache1.save(&cache_dir_path).await.expect("Failed to save cache");
+        cache1.save().await.expect("Failed to save cache");
 
         // Check if files exist
         assert!(cache_dir_path.join("serde.json").exists());
@@ -349,8 +355,8 @@ mod tests {
         assert!(cache_dir_path.join("rand.json").exists());
 
         // Create cache2 and load
-        let cache2 = Arc::new(InMemoryCache::new());
-        cache2.load(&cache_dir_path).await.expect("Failed to load cache");
+        let cache2 = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
+        cache2.load().await.expect("Failed to load cache");
 
         // Verify cache2 content
         assert_eq!(cache2.cache.read().await.data.len(), 3, "Cache should have 3 items");
@@ -366,9 +372,9 @@ mod tests {
     #[tokio::test]
     async fn test_save_removes_stale_files() {
         let dir = tempdir().unwrap();
-        let cache_dir_path = dir.path();
+        let cache_dir_path = dir.path().to_path_buf();
 
-        let cache = Arc::new(InMemoryCache::new());
+        let cache = Arc::new(InMemoryCache::new(cache_dir_path.clone()));
         let params_serde = create_params("serde");
         let content_serde = create_content("serde content");
         let params_tokio = create_params("tokio");
@@ -377,7 +383,7 @@ mod tests {
         // Save with two crates
         cache.insert(params_serde.clone(), content_serde.clone()).await;
         cache.insert(params_tokio.clone(), content_tokio.clone()).await;
-        cache.save(&cache_dir_path).await.expect("Initial save failed");
+        cache.save().await.expect("Initial save failed");
         assert!(cache_dir_path.join("serde.json").exists());
         assert!(cache_dir_path.join("tokio.json").exists());
 
@@ -387,7 +393,7 @@ mod tests {
         assert_eq!(cache.cache.read().await.data.len(), 1);
 
         // Save again
-        cache.save(&cache_dir_path).await.expect("Second save failed");
+        cache.save().await.expect("Second save failed");
 
         // Verify tokio.json was removed
         assert!(cache_dir_path.join("serde.json").exists());
@@ -398,11 +404,11 @@ mod tests {
     #[tokio::test]
     async fn test_load_nonexistent_directory() {
         let dir = tempdir().unwrap();
-        let cache_dir_path = dir.path().join("nonexistent_cache_dir"); // Does not exist
-
-        let cache = Arc::new(InMemoryCache::new());
+        let cache_dir_path = dir.path().join("nonexistent_cache_dir"); // Does not exist, but path needed for new()
+        
+        let cache = Arc::new(InMemoryCache::new(cache_dir_path)); // Pass the path
         // Should not error, just start empty
-        cache.load(&cache_dir_path).await.expect("Loading non-existent dir failed");
+        cache.load().await.expect("Loading non-existent dir failed"); // No argument
 
         assert!(cache.cache.read().await.data.is_empty(), "Cache should be empty");
     }
@@ -410,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_invalid_file_in_directory() {
          let dir = tempdir().unwrap();
-         let cache_dir_path = dir.path();
+         let cache_dir_path = dir.path().to_path_buf();
          let invalid_file_path = cache_dir_path.join("invalid.json");
          let valid_file_path = cache_dir_path.join("valid.json");
 
@@ -423,9 +429,9 @@ mod tests {
          fs::write(&valid_file_path, serde_json::to_string(&valid_data).unwrap()).await.unwrap();
 
 
-        let cache = Arc::new(InMemoryCache::new());
+        let cache = Arc::new(InMemoryCache::new(cache_dir_path.clone())); // Pass the path
         // Loading should succeed (log an error), but only load valid data
-        cache.load(&cache_dir_path).await.expect("Loading dir with invalid file failed");
+        cache.load().await.expect("Loading dir with invalid file failed"); // No argument
 
         assert_eq!(cache.cache.read().await.data.len(), 1, "Cache should contain one valid item");
         assert!(cache.contains_key(&valid_params).await, "Cache should contain the valid item");
@@ -436,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_empty_cache_clears_dir() {
         let dir = tempdir().unwrap();
-        let cache_dir_path = dir.path();
+        let cache_dir_path = dir.path().to_path_buf();
 
         // Create some dummy files
         fs::write(cache_dir_path.join("stale1.json"), "{}").await.unwrap();
@@ -444,10 +450,10 @@ mod tests {
         fs::write(cache_dir_path.join("not_json.txt"), "abc").await.unwrap();
 
 
-        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new()); // Empty cache
-
+        let cache: Arc<dyn Cache> = Arc::new(InMemoryCache::new(cache_dir_path.clone())); // Empty cache, needs path
+        
         // Save empty cache
-        cache.save(&cache_dir_path).await.expect("Failed to save empty cache");
+        cache.save().await.expect("Failed to save empty cache"); // No argument
 
         // Directory should exist, but json files should be gone
         assert!(cache_dir_path.exists());
@@ -460,12 +466,12 @@ mod tests {
     #[tokio::test]
     async fn test_load_empty_file_in_directory() {
          let dir = tempdir().unwrap();
-         let cache_dir_path = dir.path();
+         let cache_dir_path = dir.path().to_path_buf();
          let empty_file_path = cache_dir_path.join("empty.json");
          fs::write(&empty_file_path, "").await.unwrap(); // Empty file
 
-         let cache = Arc::new(InMemoryCache::new());
-         cache.load(&cache_dir_path).await.expect("Loading dir with empty file failed");
+         let cache = Arc::new(InMemoryCache::new(cache_dir_path.clone())); // Needs path
+         cache.load().await.expect("Loading dir with empty file failed"); // No argument
 
          assert!(cache.cache.read().await.data.is_empty(), "Cache should be empty after loading empty file");
     }

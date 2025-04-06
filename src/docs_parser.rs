@@ -2,7 +2,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use rmcp::{schemars, model::{IntoContents, Content}};
-use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Error)]
 pub enum DocsFetchError {
