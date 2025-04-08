@@ -1,3 +1,28 @@
+//! Rust documentation fetcher MCP implementation.
+//! 
+//! This module provides functionality to fetch and cache Rust documentation from docs.rs.
+//! It implements the MCP (Machine Control Protocol) server interface to expose documentation
+//! fetching capabilities as a service.
+//!
+//! # Main Components
+//! 
+//! - [`DocFetcher`]: Main struct that handles fetching and caching of documentation
+//! - [`DocsRsClient`]: Client for interacting with docs.rs API
+//! - [`InMemoryCache`]: Cache implementation for storing fetched documentation
+//!
+//! # Example
+//! ```no_run
+//! use std::sync::Arc;
+//! use rdoc_mcp::cache::InMemoryCache;
+//! use rdoc_mcp::mcp::DocFetcher;
+//! 
+//! async fn example() {
+//!     let cache = Arc::new(InMemoryCache::new("cache_dir".into()));
+//!     let fetcher = DocFetcher::new(cache);
+//!  
+//! }
+//! ```
+
 use rmcp::model::{Implementation, ListPromptsResult, PaginatedRequestParam, ProtocolVersion, ServerCapabilities};
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, Error as McpError, ServerHandler, model::ServerInfo, tool};
@@ -7,45 +32,72 @@ use std::sync::Arc;
 use crate::cache::{Cache, InMemoryCache};
 use crate::docs_parser::{DocsRsClient, DocsRsParams, DocContent, DocsFetchError};
 
-// Implement IntoContents trait for DocContent
+/// Implements conversion from DocContent to MCP Contents.
 impl IntoContents for DocContent {
     fn into_contents(self) -> Vec<Content> {
         vec![Content::text(self.content)]
     }
 }
 
-// Implement IntoContents trait for DocsFetchError
+/// Implements conversion from DocsFetchError to MCP Contents.
 impl IntoContents for DocsFetchError {
     fn into_contents(self) -> Vec<Content> {
         vec![Content::text(self.to_string())]
     }
 }
 
-
+/// Main struct responsible for fetching and caching Rust documentation.
+/// 
+/// `DocFetcher` provides functionality to fetch documentation from docs.rs
+/// and caches the results in memory for faster subsequent access.
 #[derive(Clone)]
 pub struct DocFetcher {
+    /// In-memory cache for storing fetched documentation
     cache: Arc<InMemoryCache>,
 }
 
 #[tool(tool_box)]
 impl DocFetcher {
+    /// Creates a new `DocFetcher` instance with the provided cache.
+    ///
+    /// # Arguments
+    /// * `cache` - Arc-wrapped InMemoryCache instance for storing documentation
     pub fn new(cache: Arc<InMemoryCache>) -> Self {
         Self { cache }
     }
 
+    /// Checks if a document with the given parameters exists in the cache.
+    ///
+    /// # Arguments
+    /// * `params` - Parameters specifying the document to check for
+    ///
+    /// # Returns
+    /// `true` if the document is cached, `false` otherwise
     #[allow(dead_code)]
-    /// Checks if the document for the given parameters is already in the cache.
     pub async fn is_cached(&self, params: &DocsRsParams) -> bool {
         self.cache.contains_key(params).await
     }
 
+    /// Clears all cached documentation.
     #[allow(dead_code)]
-    /// Clears the entire document cache.
     pub async fn clear_cache(&self) {
         self.cache.clear().await;
         tracing::info!("Document cache cleared.");
     }
 
+    /// Fetches documentation for a Rust crate from docs.rs.
+    ///
+    /// This function will first check the cache for the requested documentation.
+    /// If not found, it will fetch from docs.rs and cache the result.
+    ///
+    /// # Arguments
+    /// * `crate_name` - Name of the crate to fetch documentation for
+    /// * `version` - Version of the crate (e.g., "1.0.0")
+    /// * `path` - Path to the specific documentation page
+    ///
+    /// # Returns
+    /// * `Ok(DocContent)` - The fetched documentation content
+    /// * `Err(DocsFetchError)` - If fetching fails
     #[tool(description = "Fetch Rust documentation from docs.rs")]
     async fn fetch_document(
         &self,

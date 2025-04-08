@@ -1,3 +1,16 @@
+//! Caching implementation for Rust documentation.
+//!
+//! This module provides a caching system for storing and retrieving documentation
+//! fetched from docs.rs. It includes:
+//! - A trait defining the cache interface
+//! - An in-memory implementation with disk persistence
+//! - Efficient per-crate storage organization
+//! - Thread-safe concurrent access
+//!
+//! The cache is organized by crate, with each crate's documentation stored in a
+//! separate file for efficient loading and saving. The cache supports concurrent
+//! access through RwLocks and provides atomic operations.
+
 use crate::docs_parser::{DocContent, DocsRsParams};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -8,35 +21,83 @@ use tokio::sync::RwLock;
 use itertools::Itertools; // Added for grouping
 use std::path::PathBuf;
 
-/// Trait for a cache implementation.
+/// Trait defining the interface for a documentation cache.
+///
+/// This trait provides the core operations needed for caching documentation:
+/// - Retrieving cached documentation
+/// - Storing new documentation
+/// - Checking for cache hits
+/// - Cache management operations
+///
+/// Implementations must be both Send and Sync to support concurrent access.
 #[async_trait]
 pub trait Cache: Send + Sync {
+    /// Retrieves documentation for the given parameters if it exists in the cache.
     async fn get(&self, key: &DocsRsParams) -> Option<DocContent>;
+
+    /// Stores documentation in the cache with the given parameters as the key.
     async fn insert(&self, key: DocsRsParams, value: DocContent);
+
+    /// Checks if documentation for the given parameters exists in the cache.
     async fn contains_key(&self, key: &DocsRsParams) -> bool;
+
+    /// Removes all entries from the cache.
     async fn clear(&self);
-    /// Save cache state to its configured directory.
+
+    /// Saves the current cache state to persistent storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if the save operation fails.
     async fn save(&self) -> Result<(), io::Error>;
-    /// Load cache state from its configured directory.
+
+    /// Loads the cache state from persistent storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if the load operation fails.
     async fn load(&self) -> Result<(), io::Error>;
 }
 
-/// Represents the data stored per crate file.
-/// Key is the normalized string "{version}::{path}".
+/// Cache data for a single crate, mapping version+path to content.
+///
+/// The key is a normalized string in the format "{version}::{path}".
 type CrateCacheData = HashMap<String, DocContent>;
 
-// Keep DocsRsParams as the key for the in-memory representation
+/// In-memory representation of the entire cache.
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct CacheData {
+    /// Maps documentation parameters to their content
     data: HashMap<DocsRsParams, DocContent>,
 }
 
-// Helper to normalize DocsRsParams (excluding crate_name) to a String key
+/// Normalizes documentation parameters into a string key.
+///
+/// Creates a unique string key from version and path, excluding crate name
+/// which is handled separately for file organization.
+///
+/// # Arguments
+///
+/// * `params` - The documentation parameters to normalize
+///
+/// # Returns
+///
+/// A string in the format "{version}::{path}"
 fn normalize_key(params: &DocsRsParams) -> String {
     format!("{}::{}", params.version, params.path)
 }
 
-// Helper to denormalize a String key back to DocsRsParams
+/// Reconstructs documentation parameters from a normalized key and crate name.
+///
+/// # Arguments
+///
+/// * `crate_name` - Name of the crate
+/// * `normalized_key` - The normalized key string
+///
+/// # Returns
+///
+/// * `Ok(DocsRsParams)` - Successfully reconstructed parameters
+/// * `Err(String)` - Error message if the key format is invalid
 fn denormalize_key(crate_name: &str, normalized_key: &str) -> Result<DocsRsParams, String> {
     let parts: Vec<&str> = normalized_key.splitn(2, "::").collect();
     if parts.len() == 2 {
@@ -50,14 +111,27 @@ fn denormalize_key(crate_name: &str, normalized_key: &str) -> Result<DocsRsParam
     }
 }
 
-
+/// Thread-safe cache implementation with disk persistence.
+///
+/// This cache:
+/// - Stores documentation in memory for fast access
+/// - Persists cache contents to disk by crate
+/// - Provides concurrent access through RwLocks
+/// - Automatically manages cache files
 #[derive(Debug, Clone)]
 pub struct InMemoryCache {
+    /// Thread-safe storage for cache data
     cache: Arc<RwLock<CacheData>>,
+    /// Directory where cache files are stored
     cache_dir: PathBuf,
 }
 
 impl InMemoryCache {
+    /// Creates a new cache instance using the specified directory for persistence.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_dir` - Directory where cache files will be stored
     pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             cache: Arc::new(RwLock::new(CacheData::default())),
@@ -68,23 +142,48 @@ impl InMemoryCache {
 
 #[async_trait]
 impl Cache for InMemoryCache {
+    /// Retrieves documentation from the cache if it exists.
+    ///
+    /// This operation acquires a read lock on the cache.
     async fn get(&self, key: &DocsRsParams) -> Option<DocContent> {
         self.cache.read().await.data.get(key).cloned()
     }
 
+    /// Stores documentation in the cache.
+    ///
+    /// This operation acquires a write lock on the cache.
     async fn insert(&self, key: DocsRsParams, value: DocContent) {
         self.cache.write().await.data.insert(key, value);
     }
 
+    /// Checks if documentation exists in the cache.
+    ///
+    /// This operation acquires a read lock on the cache.
     async fn contains_key(&self, key: &DocsRsParams) -> bool {
         self.cache.read().await.data.contains_key(key)
     }
 
+    /// Removes all entries from the cache.
+    ///
+    /// This operation acquires a write lock on the cache.
     async fn clear(&self) {
         self.cache.write().await.data.clear();
     }
 
-    /// Saves the cache content to multiple JSON files within the configured directory.
+    /// Saves the cache content to disk, organizing files by crate.
+    ///
+    /// This method:
+    /// 1. Groups cache entries by crate
+    /// 2. Creates a separate JSON file for each crate
+    /// 3. Removes any stale cache files
+    /// 4. Handles concurrent access safely
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if:
+    /// - The cache directory cannot be created
+    /// - File operations fail
+    /// - JSON serialization fails
     async fn save(&self) -> Result<(), io::Error> {
         let dir_path = &self.cache_dir;
         // 1. Prepare data outside the main async block to avoid holding lock across .await
