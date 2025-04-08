@@ -1,6 +1,7 @@
 mod docs_parser;
 mod server;
 mod cache;
+mod mcp;
 
 use clap::{Parser, ValueEnum};
 use anyhow::Result;

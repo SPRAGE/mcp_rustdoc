@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use rmcp::{schemars, model::{IntoContents, Content}};
+use rmcp::schemars;
 
 #[derive(Debug, Error)]
 pub enum DocsFetchError {
@@ -32,13 +32,6 @@ pub struct DocsRsParams {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DocContent {
     pub content: String,
-}
-
-// Implement IntoContents trait for DocContent
-impl IntoContents for DocContent {
-    fn into_contents(self) -> Vec<Content> {
-        vec![Content::text(self.content)]
-    }
 }
 
 pub struct DocsRsClient {
