@@ -53,49 +53,10 @@ If you are running the server in stdio mode, use a configuration similar to this
 
 ```json
 "rustdoc-mcp": {
-        "command": "path_to_the_binary",
-        "args": [
-            "--server-type",
-            "stdio"
-        ]
-      }
+  "command": "rdoc-mcp",
+  "args": [
+      "--server-type",
+      "stdio"
+  ]
+}
 ```
-
-
-### Testing
-
-The project includes both unit tests and integration tests:
-
-```bash
-# Run all tests
-cargo test
-
-# Run unit tests only
-cargo test --lib
-
-# Run integration tests only
-cargo test --test integration_test
-```
-
-Note: Integration tests start actual server instances on different ports, so ensure ports 8081 and 8082 are available on your system.
-
-### API
-
-The MCP exposes the following tool:
-
-#### fetch_document
-
-Parameters:
-- `crate_name`: Name of the crate (e.g., "serde", "tokio")
-- `version`: Version of the crate (e.g., "1.0.0", "latest")
-- `path`: Path to the specific item you want documentation for (e.g., "serde/ser/trait.Serializer.html")
-
-
-
-## Future Improvements
-
-- Parse the HTML content to extract function signatures, descriptions, and examples
-- Support searching for functions across crates
-- Add caching for frequently accessed documentation
-- Implement automatic version detection for "latest" version requests
-- Support for markdown rendering of documentation
