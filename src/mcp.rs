@@ -98,7 +98,7 @@ impl DocFetcher {
     /// # Returns
     /// * `Ok(DocContent)` - The fetched documentation content
     /// * `Err(DocsFetchError)` - If fetching fails
-    #[tool(description = "Fetch Rust documentation from docs.rs")]
+    #[tool(description = "Fetch Rust documentation of a specific crate and version. When you encounter an api issue, you can use this tool to fetch the documentation for reference.")]
     async fn fetch_document(
         &self,
         #[tool(param)]
