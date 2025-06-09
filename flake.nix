@@ -4,27 +4,24 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+    fenix = {
+      url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
+  outputs = { self, nixpkgs, flake-utils, fenix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
-          inherit system overlays;
+          inherit system;
         };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rust-src" ];
-        };
+        rustToolchain = fenix.packages.${system}.stable.toolchain;
 
         rustPlatform = pkgs.makeRustPlatform {
-          cargo = rustToolchain;
-          rustc = rustToolchain;
+          cargo = fenix.packages.${system}.stable.cargo;
+          rustc = fenix.packages.${system}.stable.rustc;
         };
 
         commonAttrs = {
@@ -93,8 +90,6 @@
             
             # Development tools
             rust-analyzer
-            clippy
-            rustfmt
             
             # Additional utilities
             git
@@ -117,7 +112,7 @@
             echo "Run 'cargo run' to start the MCP server"
           '';
 
-          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+          RUST_SRC_PATH = "${fenix.packages.${system}.stable.rust-src}/lib/rustlib/src/rust/library";
           RUST_LOG = "debug";
         };
 

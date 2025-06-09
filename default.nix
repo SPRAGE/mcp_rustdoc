@@ -13,11 +13,11 @@ let
       rev = "b1d9ab70662946ef0850d488da1c9019f3a9752a";
       sha256 = "sha256-Pjj1zp1RqLhKj+SBpYPkIJGJjt30QbmTHa1lEKQQks4=";
     });
-    rust-overlay = import (pkgs.fetchFromGitHub {
-      owner = "oxalica";
-      repo = "rust-overlay";
-      rev = "a35d1c25f95de9b6cf1f2bff3bc9f81ada84e776";
-      sha256 = "sha256-YgEOZT7i0yV0X6e1/+XQlPT3eWQ2GpqhgRBAKdJSq7c=";
+    fenix = import (pkgs.fetchFromGitHub {
+      owner = "nix-community";
+      repo = "fenix";
+      rev = "ebaf9f5fd6f15685091c2181a5b685120e2606f5";
+      sha256 = "sha256-Yf3v730dtGhrGNtdlwnyBEr9kCXSEh1pS8TFfpCahJY=";
     });
   };
 in
