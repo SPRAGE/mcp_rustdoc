@@ -30,7 +30,7 @@
 
           src = pkgs.lib.cleanSource ./.;
 
-          cargoHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+          cargoHash = "sha256-U5GCGP6c+eKhBJE95sKIagkjIAVMlN+nRf9bfAl86po=";
 
           nativeBuildInputs = with pkgs; [
             pkg-config
@@ -42,6 +42,8 @@
             darwin.apple_sdk.frameworks.Security
             darwin.apple_sdk.frameworks.SystemConfiguration
           ];
+
+          doCheck = false; # Disable tests that require network access
 
           meta = with pkgs.lib; {
             description = "MCP implementation for querying Rust API documentation from docs.rs";
@@ -117,6 +119,11 @@
         # Export the package for use in other flakes
         lib = {
           inherit rustdocs-mcp;
+        };
+
+        # Make it easy to run from other flakes
+        overlays.default = final: prev: {
+          rdoc-mcp = rustdocs-mcp;
         };
       });
 }
