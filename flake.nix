@@ -28,11 +28,9 @@
           pname = "rdoc-mcp";
           version = "0.1.0";
 
-          src = ./.;
+          src = pkgs.lib.cleanSource ./.;
 
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
+          cargoHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
           nativeBuildInputs = with pkgs; [
             pkg-config
